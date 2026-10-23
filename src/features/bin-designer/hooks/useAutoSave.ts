@@ -24,10 +24,18 @@ import {
   registryKnifeRestFields,
 } from '../store/customBinRegistry';
 import { emitSyncEvent } from '@/shared/events/syncEventBus';
+import {
+  holdUnsavedEdit,
+  registerOpenDesignFlush,
+  takeUnsavedEdit,
+  trackDesignWrite,
+} from './designSaveGate';
 import { designId as toDesignId } from '@/core/types';
 import type { BinParams, ExportFileNameConfig, GenerationStatus } from '../types';
 
 const AUTO_SAVE_DELAY_MS = 1000;
+
+type WriteOutcome = 'saved' | 'gone' | 'failed';
 
 /**
  * Read abort state through a function call to prevent TypeScript
@@ -96,12 +104,25 @@ export function useAutoSave(): void {
   const lastSavedParams = useRef<BinParams | null>(null);
   const lastSavedConfig = useRef<ExportFileNameConfig | null>(null);
   const lastDesignId = useRef<string | null>(null);
+  // Bumped whenever another design opens, even the same one reopened: a write
+  // finishing in a later session must not vouch for what the editor holds now.
+  const session = useRef({ designId: null as string | null, id: 0 });
+  const lastSeen = useRef<{
+    params: BinParams;
+    config: ExportFileNameConfig;
+    designId: string;
+    session: number;
+  } | null>(null);
   // Abort token for the current pending save (new object per effect run)
   const abortTokenRef = useRef<{ current: boolean }>({ current: false });
   // What a save currently past its abort checks is writing. `lastSaved*` only
   // updates once the write resolves, so without this the unmount flush would
   // re-issue an identical write for a save already in flight.
-  const inFlight = useRef<{ params: BinParams; config: ExportFileNameConfig } | null>(null);
+  const inFlight = useRef<{
+    params: BinParams;
+    config: ExportFileNameConfig;
+    write?: Promise<WriteOutcome>;
+  } | null>(null);
   // Read behind a function boundary so a check after an await sees the slot as
   // it is now, not as it was narrowed to at the assignment above the await.
   const isInFlight = (params: BinParams, config: ExportFileNameConfig): boolean => {
@@ -109,65 +130,122 @@ export function useAutoSave(): void {
     return current !== null && current.params === params && current.config === config;
   };
 
+  const takesHeldEdit = (
+    designId: string,
+    shownParams: BinParams,
+    shownConfig: ExportFileNameConfig
+  ): boolean => {
+    const held = takeUnsavedEdit();
+    return (
+      held !== null &&
+      held.designId === designId &&
+      held.params === shownParams &&
+      held.config === shownConfig
+    );
+  };
+
   // The write itself plus the bookkeeping every consumer downstream depends on
   // (registry entry for the planner palette, `design-saved` for linked bins).
   // Deliberately un-abortable: once we've decided to persist, dropping the
   // registry/event half would leave the layout pointing at a stale design.
   const persist = useCallback(
-    async (
+    (
       paramsToSave: BinParams,
       configToSave: ExportFileNameConfig,
       designId: string,
-      thumbnail: string | null | undefined
-    ): Promise<boolean> => {
-      inFlight.current = { params: paramsToSave, config: configToSave };
-      let result;
-      try {
-        result = await updateDesignParams(
-          toDesignId(designId),
-          paramsToSave,
-          thumbnail,
-          configToSave
-        );
-      } finally {
-        // Only clear if a newer persist hasn't already claimed the slot.
-        if (isInFlight(paramsToSave, configToSave)) {
-          inFlight.current = null;
+      thumbnail: string | null | undefined,
+      writeSession: number
+    ): Promise<WriteOutcome> => {
+      const write = (async (): Promise<WriteOutcome> => {
+        inFlight.current = { params: paramsToSave, config: configToSave };
+        let result;
+        try {
+          result = await updateDesignParams(
+            toDesignId(designId),
+            paramsToSave,
+            thumbnail,
+            configToSave
+          );
+        } finally {
+          // Only clear if a newer persist hasn't already claimed the slot.
+          if (isInFlight(paramsToSave, configToSave)) {
+            inFlight.current = null;
+          }
         }
-      }
-      if (!isOk(result)) return false;
+        if (!isOk(result)) {
+          if (result.error.code !== 'STORAGE_NOT_FOUND') return 'failed';
+          // Deleted while open: there is nowhere left to save it, and holding
+          // the switch for it would trap the user on a design that is gone.
+          if (writeSession === session.current.id) {
+            lastSavedParams.current = paramsToSave;
+            lastSavedConfig.current = configToSave;
+          }
+          return 'gone';
+        }
 
-      lastSavedParams.current = paramsToSave;
-      lastSavedConfig.current = configToSave;
-      // Track active design for session restoration
-      setActiveDesignId(result.value.id);
-      // Sync lightweight ref to registry for Layout Planner
-      upsertRegistryEntry({
-        id: result.value.id,
-        name: result.value.name,
-        width: paramsToSave.width,
-        depth: paramsToSave.depth,
-        height: paramsToSave.height,
-        ...registryEdgeFields(paramsToSave),
-        ...registryHeightFields(paramsToSave),
-        ...registryOverhangFields(paramsToSave),
-        ...registrySlantFields(paramsToSave),
-        ...registryKnifeRestFields(paramsToSave),
-        updatedAt: result.value.updatedAt,
-      });
-      // Notify design-linking to auto-sync linked bins
-      emitSyncEvent({
-        type: 'design-saved',
-        designId: result.value.id,
-        dimensions: {
+        // A write that lands after another design opened, or after this one was
+        // reopened from storage, must not vouch for what the editor holds now.
+        if (writeSession === session.current.id) {
+          lastSavedParams.current = paramsToSave;
+          lastSavedConfig.current = configToSave;
+          // Track active design for session restoration
+          setActiveDesignId(result.value.id);
+        }
+        // Sync lightweight ref to registry for Layout Planner
+        upsertRegistryEntry({
+          id: result.value.id,
+          name: result.value.name,
           width: paramsToSave.width,
           depth: paramsToSave.depth,
           height: paramsToSave.height,
-        },
-      });
-      return true;
+          ...registryEdgeFields(paramsToSave),
+          ...registryHeightFields(paramsToSave),
+          ...registryOverhangFields(paramsToSave),
+          ...registrySlantFields(paramsToSave),
+          ...registryKnifeRestFields(paramsToSave),
+          updatedAt: result.value.updatedAt,
+        });
+        // Notify design-linking to auto-sync linked bins
+        emitSyncEvent({
+          type: 'design-saved',
+          designId: result.value.id,
+          dimensions: {
+            width: paramsToSave.width,
+            depth: paramsToSave.depth,
+            height: paramsToSave.height,
+          },
+        });
+        return 'saved';
+      })();
+      // Kept so a flush that finds this write already under way can report its
+      // outcome rather than its absence.
+      if (isInFlight(paramsToSave, configToSave) && inFlight.current) {
+        inFlight.current = { ...inFlight.current, write };
+      }
+      trackDesignWrite(write.then((outcome) => outcome !== 'failed'));
+      return write;
     },
     []
+  );
+
+  // No thumbnail: the canvas is gone or already shows another design. Storage
+  // keeps the old image marked outdated, so the regeneration hooks redo it.
+  const flushUnsaved = useCallback(
+    (
+      paramsToSave: BinParams,
+      configToSave: ExportFileNameConfig,
+      designId: string,
+      writeSession: number
+    ): Promise<WriteOutcome> | null => {
+      if (lastSavedParams.current === paramsToSave && lastSavedConfig.current === configToSave) {
+        return null;
+      }
+      // A save already writing exactly this will land on its own; an in-flight
+      // save for older params still needs the flush.
+      if (isInFlight(paramsToSave, configToSave)) return inFlight.current?.write ?? null;
+      return persist(paramsToSave, configToSave, designId, undefined, writeSession);
+    },
+    [persist]
   );
 
   const performSave = useCallback(
@@ -175,7 +253,8 @@ export function useAutoSave(): void {
       paramsToSave: BinParams,
       configToSave: ExportFileNameConfig,
       designId: string,
-      abortToken: { current: boolean }
+      abortToken: { current: boolean },
+      writeSession: number
     ): Promise<void> => {
       setSaveStatus('saving');
 
@@ -198,23 +277,48 @@ export function useAutoSave(): void {
         heightUnitMm: paramsToSave.heightUnitMm,
       });
 
-      const saved = await persist(paramsToSave, configToSave, designId, thumbnail);
-      setSaveStatus(saved ? 'saved' : 'error');
+      const outcome = await persist(paramsToSave, configToSave, designId, thumbnail, writeSession);
+      setSaveStatus(outcome === 'saved' ? 'saved' : 'error');
     },
     [setSaveStatus, persist]
   );
 
   useEffect(() => {
+    if (session.current.designId !== currentDesignId) {
+      session.current = { designId: currentDesignId, id: session.current.id + 1 };
+    }
+    // A switch that skipped settleDesignSaves swaps params and id in one
+    // update, so the previous design's unsaved edit survives only in this ref,
+    // and the cleanup has already cancelled the save that would have written it.
+    const previous = lastSeen.current;
+    lastSeen.current =
+      itemKind === 'bin' && currentDesignId
+        ? {
+            params,
+            config: exportFileNameConfig,
+            designId: currentDesignId,
+            session: session.current.id,
+          }
+        : null;
+    if (previous && previous.designId !== currentDesignId) {
+      void flushUnsaved(previous.params, previous.config, previous.designId, previous.session);
+    }
+
     // Params-only autosave: non-bin kinds persist through their own hooks,
     // and flushing here would write stale bin params onto their rows.
     if (itemKind !== 'bin') return;
     // Skip first render (initial mount shouldn't trigger save)
     if (isFirstRender.current) {
       isFirstRender.current = false;
-      lastSavedParams.current = params;
       lastSavedConfig.current = exportFileNameConfig;
       lastDesignId.current = currentDesignId;
-      return;
+      // An edit the last designer failed to write as it closed falls through
+      // to be saved like a fresh one; anything else on screen is stored.
+      if (!currentDesignId || !takesHeldEdit(currentDesignId, params, exportFileNameConfig)) {
+        lastSavedParams.current = params;
+        return;
+      }
+      lastSavedParams.current = null;
     }
 
     // When switching designs (loadDesign), reset tracking refs without saving.
@@ -248,8 +352,9 @@ export function useAutoSave(): void {
     abortTokenRef.current = abortToken;
 
     const designId = currentDesignId; // Narrowed to string by guard above
+    const writeSession = session.current.id;
     timerRef.current = setTimeout(() => {
-      void performSave(params, exportFileNameConfig, designId, abortToken);
+      void performSave(params, exportFileNameConfig, designId, abortToken, writeSession);
     }, AUTO_SAVE_DELAY_MS);
 
     return () => {
@@ -258,31 +363,42 @@ export function useAutoSave(): void {
         clearTimeout(timerRef.current);
       }
     };
-  }, [itemKind, params, exportFileNameConfig, currentDesignId, performSave]);
+  }, [itemKind, params, exportFileNameConfig, currentDesignId, performSave, flushUnsaved]);
 
   // Leaving the designer (route change) unmounts this hook, which aborts both
   // the debounce and any save still waiting on generation — a window of up to
   // ~6s in which the user's last edits were silently dropped while the
-  // in-memory store kept showing them. Flush straight to storage
-  // instead. No thumbnail: the canvas is already gone, and passing `undefined`
-  // keeps the stored one until useBackgroundThumbnailRegen refreshes it.
+  // in-memory store kept showing them. Flush straight to storage instead.
   useEffect(() => {
     return () => {
       const state = useDesignerStore.getState();
       const id = state.currentDesignId;
       if (!id || state.itemKind !== 'bin') return;
-      if (
-        lastSavedParams.current === state.params &&
-        lastSavedConfig.current === state.exportFileNameConfig
-      ) {
-        return;
-      }
-      // A save already writing exactly this will land on its own; an in-flight
-      // save for older params still needs the flush.
-      if (isInFlight(state.params, state.exportFileNameConfig)) {
-        return;
-      }
-      void persist(state.params, state.exportFileNameConfig, id, undefined);
+      const { params: unsaved, exportFileNameConfig: unsavedConfig } = state;
+      const write = flushUnsaved(unsaved, unsavedConfig, id, session.current.id);
+      // Gone once this lands, the hook no longer speaks for the open design:
+      // another may have become active meanwhile.
+      session.current = { ...session.current, id: session.current.id + 1 };
+      const hold = () => holdUnsavedEdit({ designId: id, params: unsaved, config: unsavedConfig });
+      void write?.then((outcome) => {
+        if (outcome === 'failed') hold();
+      }, hold);
     };
-  }, [persist]);
+  }, [flushUnsaved]);
+
+  useEffect(
+    () =>
+      registerOpenDesignFlush(() => {
+        const state = useDesignerStore.getState();
+        const id = state.currentDesignId;
+        if (id && state.itemKind === 'bin') {
+          // A closing flush can fail after this designer opened on its edit.
+          if (takesHeldEdit(id, state.params, state.exportFileNameConfig)) {
+            lastSavedParams.current = null;
+          }
+          void flushUnsaved(state.params, state.exportFileNameConfig, id, session.current.id);
+        }
+      }),
+    [flushUnsaved]
+  );
 }

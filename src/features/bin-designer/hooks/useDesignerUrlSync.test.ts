@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, act, waitFor } from '@testing-library/react';
 import { useDesignerUrlSync } from './useDesignerUrlSync';
+import { _resetDesignSaveGate, trackDesignWrite } from './designSaveGate';
 import { useDesignerStore } from '../store/designer';
 import * as DesignerStorage from '@/features/bin-designer/storage/DesignerStorage';
 import { ok, err, storageUnavailable } from '@/core/result';
@@ -16,6 +17,7 @@ describe('useDesignerUrlSync', () => {
   beforeEach(() => {
     originalHref = window.location.href;
     vi.clearAllMocks();
+    _resetDesignSaveGate();
 
     // Reset store to clean state (no active design)
     useDesignerStore.setState({
@@ -59,6 +61,30 @@ describe('useDesignerUrlSync', () => {
       const state = useDesignerStore.getState();
       expect(state.currentDesignId).toBe('url-design-123');
       expect(state.designName).toBe('Test Design');
+    });
+
+    it("reads the design only once the open design's saves have settled", async () => {
+      vi.mocked(DesignerStorage.loadDesign).mockResolvedValue(ok(makeSavedDesign('next')));
+      let release = (): void => {};
+      trackDesignWrite(
+        new Promise<boolean>((resolve) => {
+          release = () => resolve(true);
+        })
+      );
+      window.history.replaceState(null, '', '/designer?id=next');
+
+      renderHook(() => useDesignerUrlSync());
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(DesignerStorage.loadDesign).not.toHaveBeenCalled();
+
+      await act(async () => {
+        release();
+      });
+      await waitFor(() => {
+        expect(useDesignerStore.getState().currentDesignId).toBe('next');
+      });
     });
 
     it('does not load when URL has no ?id= param', async () => {
@@ -129,6 +155,98 @@ describe('useDesignerUrlSync', () => {
         expect(DesignerStorage.loadDesign).toHaveBeenCalledWith('design-2');
         expect(useDesignerStore.getState().currentDesignId).toBe('design-2');
       });
+    });
+  });
+
+  describe('while the open design is still saving', () => {
+    function blockSaves(): (saved: boolean) => void {
+      let release: (saved: boolean) => void = () => {};
+      trackDesignWrite(
+        new Promise<boolean>((resolve) => {
+          release = resolve;
+        })
+      );
+      return (saved) => release(saved);
+    }
+
+    function navigate(url: string): void {
+      act(() => {
+        window.history.pushState(null, '', url);
+        window.dispatchEvent(new PopStateEvent('popstate'));
+      });
+    }
+
+    beforeEach(() => {
+      useDesignerStore.setState({ currentDesignId: 'open' });
+      window.history.replaceState(null, '', '/designer?id=open');
+      vi.mocked(DesignerStorage.loadDesign).mockResolvedValue(ok(makeSavedDesign('picked')));
+    });
+
+    // Queued one-shot reads would otherwise outlive a failing test.
+    afterEach(() => {
+      vi.mocked(DesignerStorage.loadDesign).mockReset();
+    });
+
+    it('drops a pick that Back undid before the saves settled', async () => {
+      const release = blockSaves();
+      renderHook(() => useDesignerUrlSync());
+
+      navigate('/designer?id=picked');
+      navigate('/designer?id=open');
+      await act(async () => {
+        release(true);
+      });
+
+      expect(DesignerStorage.loadDesign).not.toHaveBeenCalled();
+      expect(useDesignerStore.getState().currentDesignId).toBe('open');
+      expect(window.location.search).toBe('?id=open');
+    });
+
+    it('drops the pick when the designer closes before the saves settle', async () => {
+      const release = blockSaves();
+      const { unmount } = renderHook(() => useDesignerUrlSync());
+
+      navigate('/designer?id=picked');
+      unmount();
+      await act(async () => {
+        release(true);
+      });
+
+      expect(DesignerStorage.loadDesign).not.toHaveBeenCalled();
+      expect(useDesignerStore.getState().currentDesignId).toBe('open');
+    });
+
+    it('reads again when the open design was edited during the read', async () => {
+      vi.mocked(DesignerStorage.loadDesign)
+        .mockImplementationOnce(() => {
+          useDesignerStore.getState().setParam('width', 5);
+          return Promise.resolve(ok(makeSavedDesign('picked', 'Stale read')));
+        })
+        .mockResolvedValueOnce(ok(makeSavedDesign('picked', 'Fresh read')));
+      renderHook(() => useDesignerUrlSync());
+
+      navigate('/designer?id=picked');
+
+      await waitFor(() => {
+        expect(useDesignerStore.getState().currentDesignId).toBe('picked');
+      });
+      expect(DesignerStorage.loadDesign).toHaveBeenCalledTimes(2);
+      expect(useDesignerStore.getState().designName).toBe('Fresh read');
+    });
+
+    it('keeps the open design when its edits could not be saved', async () => {
+      const release = blockSaves();
+      renderHook(() => useDesignerUrlSync());
+
+      navigate('/designer?id=picked');
+      await act(async () => {
+        release(false);
+      });
+
+      expect(DesignerStorage.loadDesign).not.toHaveBeenCalled();
+      expect(useDesignerStore.getState().currentDesignId).toBe('open');
+      expect(useDesignerStore.getState().saveStatus).toBe('error');
+      expect(window.location.search).toBe('?id=open');
     });
   });
 

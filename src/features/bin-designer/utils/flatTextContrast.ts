@@ -1,7 +1,13 @@
 import { isPartialMask } from '@/shared/utils/cellMask';
 import { hexContrast } from '@/shared/utils/color';
 import type { BinParams, TextMode } from '../types';
-import { WALL_TEXT_SIDES, resolveTextStyle, resolveWallTextStyle } from '../types';
+import { floorTextHostBlock } from '@/shared/utils/floorTextHost';
+import {
+  WALL_TEXT_SIDES,
+  resolveFloorTextStyle,
+  resolveTextStyle,
+  resolveWallTextStyle,
+} from '../types';
 import {
   computeActiveZones,
   getZoneColor,
@@ -52,6 +58,14 @@ export function flatTextSurfaces(p: BinParams): ReadonlySet<TextSurface> {
         isFlat(resolveWallTextStyle(p.textDefaults, p.surfaceText, side).mode)
     );
     if (flatWall) out.add('body');
+  }
+
+  if (
+    (p.surfaceText?.floorText?.trim() ?? '') !== '' &&
+    floorTextHostBlock(p) === null &&
+    isFlat(resolveFloorTextStyle(p.textDefaults, p.surfaceText).mode)
+  ) {
+    out.add('body');
   }
 
   for (const c of p.cutouts) {

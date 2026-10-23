@@ -107,7 +107,7 @@ function inflate(box: WorldKeepOut, by: number): WorldKeepOut {
  * pattern window (5.85mm and 14.78mm from a cell centre against a 16.30mm
  * half-span), so this is not a case the window inset already covers.
  */
-function pinKeepOuts(params: BinParams, dim: BinDimensions): WorldKeepOut[] {
+export function pinKeepOuts(params: BinParams, dim: BinDimensions): WorldKeepOut[] {
   if (!dim.detachableFeet) return [];
   const resolved = resolveDetachableFeet(params);
   const radius = DETACHABLE_PIN_HOLE_DIAMETER_MM / 2;
@@ -204,8 +204,17 @@ function attachmentKeepOuts(params: BinParams, dim: BinDimensions): WorldKeepOut
  * A tilted divider contributes its axis-aligned bounding box, which clears more
  * than the wall strictly covers — the safe direction, and the same convention
  * `dividerPatterns` uses for label tabs.
+ *
+ * `span`, when given, is the band of body Z the caller needs clear. A leaning
+ * divider then answers with its true section over that band: `buildLeaningPrism`
+ * widens it past the thickness and slides it from the foot, at the floor slab's
+ * underside (Z=0), toward the top edge.
  */
-function standingFeatureKeepOuts(params: BinParams, dim: BinDimensions): WorldKeepOut[] {
+export function standingFeatureKeepOuts(
+  params: BinParams,
+  dim: BinDimensions,
+  span?: { readonly z0: number; readonly z1: number }
+): WorldKeepOut[] {
   const { innerW, innerD, innerOffsetX, innerOffsetY } = dim;
   const out: WorldKeepOut[] = [];
 
@@ -229,15 +238,24 @@ function standingFeatureKeepOuts(params: BinParams, dim: BinDimensions): WorldKe
     );
     for (const seg of interiorDividerSegments(params, innerW, innerD, dividerHeight)) {
       const rad = (seg.rotateZ * Math.PI) / 180;
-      const halfX = Math.abs(Math.cos(rad)) * (seg.wallLen / 2) + Math.abs(Math.sin(rad)) * half;
-      const halfY = Math.abs(Math.sin(rad)) * (seg.wallLen / 2) + Math.abs(Math.cos(rad)) * half;
+      const driftX = seg.x - seg.footX;
+      const driftY = seg.y - seg.footY;
+      const swept = span !== undefined && dividerHeight > 0;
+      const across = swept
+        ? (half * Math.hypot(Math.hypot(driftX, driftY), dividerHeight)) / dividerHeight
+        : half;
+      const halfX = Math.abs(Math.cos(rad)) * (seg.wallLen / 2) + Math.abs(Math.sin(rad)) * across;
+      const halfY = Math.abs(Math.sin(rad)) * (seg.wallLen / 2) + Math.abs(Math.cos(rad)) * across;
+      const at = (z: number): number => (swept ? Math.min(1, Math.max(0, z / dividerHeight)) : 0);
+      const t0 = at(span?.z0 ?? 0);
+      const t1 = at(span?.z1 ?? 0);
       // Keyed to the FOOT, not the top edge: this keep-out is the floor
       // footprint, and a leaning divider stands nowhere near `seg.x/y` there.
       out.push({
-        xMin: seg.footX - halfX,
-        xMax: seg.footX + halfX,
-        yMin: seg.footY - halfY,
-        yMax: seg.footY + halfY,
+        xMin: seg.footX - halfX + Math.min(driftX * t0, driftX * t1),
+        xMax: seg.footX + halfX + Math.max(driftX * t0, driftX * t1),
+        yMin: seg.footY - halfY + Math.min(driftY * t0, driftY * t1),
+        yMax: seg.footY + halfY + Math.max(driftY * t0, driftY * t1),
         zMin: 0,
         zMax: 0,
       });
@@ -284,7 +302,11 @@ function localKeepOuts(
  * Every returned window is already inset for the socket taper and the wall, so
  * the builder only has to fit elements inside it.
  */
-export function planFloorPattern(params: BinParams, dim: BinDimensions): FloorPatternPlan | null {
+export function planFloorPattern(
+  params: BinParams,
+  dim: BinDimensions,
+  extraKeepOuts: readonly WorldKeepOut[] = []
+): FloorPatternPlan | null {
   if (!floorPatternApplies(params, dim)) return null;
 
   const inset = floorWindowInset(params.wallThickness);
@@ -296,6 +318,7 @@ export function planFloorPattern(params: BinParams, dim: BinDimensions): FloorPa
     ...attachmentKeepOuts(params, dim),
     ...pinKeepOuts(params, dim),
     ...standingFeatureKeepOuts(params, dim),
+    ...extraKeepOuts,
   ].map((k) => inflate(k, border));
 
   const windows: FloorPatternWindow[] = [];

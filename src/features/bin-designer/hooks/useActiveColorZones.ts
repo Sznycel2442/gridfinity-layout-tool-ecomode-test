@@ -12,6 +12,14 @@ import { computeActiveZones, type ColorZone } from '@/features/bin-designer/type
 export function useActiveColorZones(): ReadonlySet<ColorZone> {
   const inputs = useDesignerStore(
     useShallow((s) => ({
+      style: s.params.style,
+      width: s.params.width,
+      depth: s.params.depth,
+      gridUnitMm: s.params.gridUnitMm,
+      gridUnitMmY: s.params.gridUnitMmY,
+      fractionalEdgeX: s.params.fractionalEdgeX,
+      fractionalEdgeY: s.params.fractionalEdgeY,
+      magnetAnchor: s.params.magnetAnchor,
       base: s.params.base,
       label: s.params.label,
       scoop: s.params.scoop,

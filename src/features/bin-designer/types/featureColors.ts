@@ -11,6 +11,7 @@
 
 import { FeatureTag } from '@/shared/types/generation';
 import { isSocketlessBase } from './base';
+import { floorTextHostBlock, type FloorTextHostParams } from '@/shared/utils/floorTextHost';
 import { isPartialMask, type CellMask } from '@/shared/utils/cellMask';
 import type { BaseStyle, WallTextSide } from './index';
 
@@ -553,15 +554,22 @@ export function isSingleColor(
 }
 
 /**
+ * Floor text asks whether the floor survives, which reads the bin style and,
+ * under detachable feet, the footprint. Absent fields read as a standard bin
+ * with a closed floor, for callers that never carry floor text.
+ */
+type FloorHostInputs = Partial<Omit<FloorTextHostParams, 'cellMask' | 'base'>>;
+
+/**
  * Subset of `BinParams` that determines which zones are visually
  * meaningful. Declared structurally to avoid a circular import on
  * the full `BinParams` type.
  */
-export interface ActiveZonesParams {
+export interface ActiveZonesParams extends FloorHostInputs {
   readonly base: {
     readonly style: BaseStyle;
     readonly stackingLip: boolean;
-  };
+  } & Partial<FloorTextHostParams['base']>;
   readonly label: {
     readonly enabled: boolean;
     readonly mode?: 'text' | 'socket';
@@ -586,12 +594,13 @@ export interface ActiveZonesParams {
     readonly labelIcons?: readonly (string | null)[];
   };
   readonly cutouts?: readonly CaptionedShape[];
-  /** Wall and lid text both activate the `text` zone. Mirrors the worker
+  /** Wall, lid and floor text activate the `text` zone. Mirrors the worker
    *  gates: polygon bins skip wall and lid text (see `wallTextLayout.ts`,
    *  `resolveLidInputs`), solid bins carry wall text like hollow ones. */
   readonly surfaceText?: {
     readonly walls?: Readonly<Partial<Record<WallTextSide, string>>>;
     readonly lidText?: string;
+    readonly floorText?: string;
   };
   readonly cellMask?: CellMask;
   /**
@@ -734,6 +743,14 @@ export function computeActiveZones(p: ActiveZonesParams): ReadonlySet<ColorZone>
       (t) => typeof t === 'string' && t.trim().length > 0
     );
 
+  const hasFloorText =
+    (p.surfaceText?.floorText ?? '').trim() !== '' &&
+    floorTextHostBlock({
+      ...p,
+      style: p.style ?? 'standard',
+      base: { solid: false, spacer: false, lightweight: false, ...p.base },
+    }) === null;
+
   const zones = new Set<ColorZone>(['body']);
   // The Base zone paints FeatureTag.SOCKET, which only the socket branch of
   // `shellStage` stamps. A socketless base has none, so offering the zone would
@@ -764,7 +781,13 @@ export function computeActiveZones(p: ActiveZonesParams): ReadonlySet<ColorZone>
     }
   }
   if (hasDividers) zones.add('dividers');
-  if (hasTabText || hasCutoutText || hasWallText || (zones.has('lid') && hasLidText(p))) {
+  if (
+    hasTabText ||
+    hasCutoutText ||
+    hasWallText ||
+    hasFloorText ||
+    (zones.has('lid') && hasLidText(p))
+  ) {
     zones.add('text');
   }
   // Accent bands are independent of every other feature — a positive-height

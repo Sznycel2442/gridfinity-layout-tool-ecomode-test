@@ -10,6 +10,8 @@ const bins: SupporterBin[] = [
   { id: 'e', name: 'Eli', department: 0, isNewest: false },
   { id: 'q', name: 'Quinn', department: 0, message: 'Saved my whole garage', isNewest: false },
   { id: 'c', name: 'Cy', department: 3, isNewest: false },
+  { id: 's1', name: 'Somebody', department: 0, isNewest: false },
+  { id: 's2', name: 'Somebody', department: 3, isNewest: false },
   { id: 'x', name: null, isNewest: false },
 ];
 const plan = buildCreditsPlan(bins);
@@ -26,7 +28,17 @@ const schedule = buildRollSchedule(plan, binsById, measured, region, 100);
 
 describe('buildRollSchedule', () => {
   it('seats every credited bin after the title card', () => {
-    expect([...schedule.seatTimes.keys()].sort()).toEqual(['a', 'b', 'c', 'd', 'e', 'q', 'x']);
+    expect([...schedule.seatTimes.keys()].sort()).toEqual([
+      'a',
+      'b',
+      'c',
+      'd',
+      'e',
+      'q',
+      's1',
+      's2',
+      'x',
+    ]);
     for (const time of schedule.seatTimes.values()) expect(time).toBeGreaterThan(INTRO_SECONDS);
   });
 
@@ -44,8 +56,64 @@ describe('buildRollSchedule', () => {
     expect(schedule.timeline.offsetAt(schedule.seatTimes.get('q') ?? 0)).toBeCloseTo(at, 0);
   });
 
+  it('drops a whole crowd of bins together as its one line passes', () => {
+    const line = measured.find((m) => m.id === 'crowd-somebody');
+    const time = schedule.timeline.timeAt((line?.center ?? 0) - region.readingLine);
+    const [first, second] = ['s1', 's2'].map((id) => schedule.seatTimes.get(id) ?? 0);
+    expect(first).toBeCloseTo(time);
+    expect(second - first).toBeGreaterThan(0);
+    expect(second - first).toBeLessThan(0.1);
+    expect(schedule.creditTimes.get('s2')).toBeCloseTo(time);
+  });
+
+  it('keeps even a huge crowd raining in within the hold of its line', () => {
+    const crowd: SupporterBin[] = Array.from({ length: 500 }, (_, i) => ({
+      id: `s${i}`,
+      name: 'Somebody',
+      department: i % 8,
+      isNewest: false,
+    }));
+    const big = buildCreditsPlan(crowd);
+    const stacked: MeasuredCredit[] = big.items.map((item, i) => ({
+      id: item.id,
+      center: i * 60 + 30,
+      height: 60,
+    }));
+    const times = buildRollSchedule(
+      big,
+      new Map(crowd.map((b) => [b.id, b])),
+      stacked,
+      region,
+      100
+    );
+    const drops = crowd.map((b) => times.seatTimes.get(b.id) ?? 0);
+    expect(Math.max(...drops) - Math.min(...drops)).toBeLessThanOrEqual(1.8 + 1e-9);
+  });
+
+  it('keeps the camera on the whole plate until a crowd has landed', () => {
+    const crowd: SupporterBin[] = [
+      ...Array.from({ length: 40 }, (_, i) => ({
+        id: `s${i}`,
+        name: 'Somebody',
+        department: i % 8,
+        isNewest: false,
+      })),
+      { id: 'x', name: null, isNewest: false },
+    ];
+    const tight = buildCreditsPlan(crowd);
+    const rows: MeasuredCredit[] = tight.items.map((item, i) => ({
+      id: item.id,
+      center: i * 30 + 15,
+      height: 30,
+    }));
+    const times = buildRollSchedule(tight, new Map(crowd.map((b) => [b.id, b])), rows, region, 100);
+    const lastDrop = Math.max(...crowd.slice(0, 40).map((b) => times.seatTimes.get(b.id) ?? 0));
+    const redacted = times.zoneCues.find((c) => c.zone === 8);
+    expect(redacted?.time).toBeGreaterThanOrEqual(lastDrop + 0.6);
+  });
+
   it('cues the camera to each department ahead of its heading, in roll order', () => {
-    expect(schedule.zoneCues.map((c) => c.zone)).toEqual([0, 3, 8]);
+    expect(schedule.zoneCues.map((c) => c.zone)).toEqual([0, 3, null, 8]);
     const heading = measured.find((m) => m.id === 'dept-3');
     const read = schedule.timeline.timeAt((heading?.center ?? 0) - region.readingLine);
     expect(schedule.zoneCues[1].time).toBeLessThan(read);

@@ -2,6 +2,7 @@ import { Button } from '@/design-system';
 import { useTranslation } from '@/i18n';
 import type { CreditsClock } from '../../utils/creditsClock';
 import { HOLD_RATE, NO_SCRUB_ATTR } from '../../hooks/useRollScrub';
+import { SoundToggle } from '../SoundToggle';
 
 /** A keyboard press on a hold button can't be held, so it jumps this far instead. */
 const KEY_JUMP_SECONDS = 8;
@@ -11,6 +12,8 @@ interface CreditsControlsProps {
   paused: boolean;
   stacked: boolean;
   showHint: boolean;
+  soundOn: boolean;
+  onToggleSound: () => void;
   onTogglePause: () => void;
   onSkip: () => void;
   onKofi: (e: React.MouseEvent<HTMLButtonElement>) => void;
@@ -67,6 +70,8 @@ export function CreditsControls({
   paused,
   stacked,
   showHint,
+  soundOn,
+  onToggleSound,
   onTogglePause,
   onSkip,
   onKofi,
@@ -77,7 +82,7 @@ export function CreditsControls({
     <div
       {...{ [NO_SCRUB_ATTR]: '' }}
       className={`absolute z-30 flex flex-col gap-2 ${
-        stacked ? 'inset-x-0 bottom-4 items-center' : 'bottom-6 right-6 items-end'
+        stacked ? 'inset-x-0 bottom-4 items-center px-4' : 'bottom-6 right-6 items-end'
       }`}
     >
       {showHint && (
@@ -88,7 +93,11 @@ export function CreditsControls({
           {t('supporters.credits.scrubHint')}
         </p>
       )}
-      <div className="flex items-center gap-1 rounded-lg bg-black/25 p-1 backdrop-blur-sm">
+      <div
+        className={`flex items-center gap-1 rounded-lg bg-black/25 p-1 backdrop-blur-sm ${
+          stacked ? 'max-w-full flex-wrap justify-center' : ''
+        }`}
+      >
         <HoldButton
           clock={clock}
           direction={-1}
@@ -111,6 +120,7 @@ export function CreditsControls({
           label={t('supporters.credits.fastForward')}
           path={FORWARD}
         />
+        <SoundToggle on={soundOn} onToggle={onToggleSound} />
         <Button
           variant="ghost"
           onClick={onSkip}
@@ -120,7 +130,7 @@ export function CreditsControls({
         >
           {t('supporters.credits.skip')}
         </Button>
-        <span aria-hidden="true" className="mx-1 h-5 w-px bg-current opacity-20" />
+        {!stacked && <span aria-hidden="true" className="mx-1 h-5 w-px bg-current opacity-20" />}
         <Button
           variant="ghost"
           onClick={onKofi}

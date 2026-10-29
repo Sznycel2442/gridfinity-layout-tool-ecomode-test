@@ -4,72 +4,145 @@ import {
   serializeDonorRecord,
   sliceWhole,
 } from '../api/lib/supporters.js';
-import type { TransactionRow } from './seed-supporters.core.js';
+import { parseCsvDate, type TransactionRow } from './seed-supporters.core.js';
 
 export const PREVIOUS_MESSAGE_LENGTH = 140;
 
-export interface MessageRestore {
+/** Further than this past the donor's first tip, a stored date was moved by a repeat tip. */
+const MOVED_DATE_MS = 24 * 60 * 60 * 1000;
+
+export interface RecordFix {
   field: string;
   previous: string;
   value: string;
-  storedLength: number;
-  restoredLength: number;
+  message?: 'restored' | 'added';
+  date?: 'added' | 'moved';
 }
 
-export interface RestorePlan {
-  restores: MessageRestore[];
+export interface BackfillPlan {
+  fixes: RecordFix[];
   /** Messages at the old cap with no single full text from their own donor; left as they are. */
   unmatched: number;
 }
 
+function earliest(dates: (string | undefined)[]): string | undefined {
+  return dates.reduce<string | undefined>((a, b) => (b && (!a || b < a) ? b : a), undefined);
+}
+
+export interface BackfillContext {
+  /** The seed's own date assignment for `seed:anon:*`, which have no transactions of their own. */
+  seedAnonDates?: Record<string, string | undefined>;
+}
+
+/** A bare display name, as the webhook stored one before it kept messages. The panel only writes JSON records. */
+function isBareName(raw: string): boolean {
+  try {
+    const value: unknown = JSON.parse(raw);
+    return !(typeof value === 'object' && value !== null && 'n' in value);
+  } catch {
+    return true;
+  }
+}
+
 /**
- * A stored message is restored only from its own donor's transactions (the
- * salted email id for a webhook record, the public name for a `seed:` record,
- * as the seed attributed it) and only when it is exactly what the old cap
- * would have cut that full text to. A message a supporter has since edited,
- * even to 139 or 200 characters, never matches, and neither does a full text
- * the content filter now rejects.
+ * What a Ko-fi export can still add to the stored records: a message the old
+ * cap cut, a message or join date that was never stored, and a join date a
+ * repeat tip moved forward. A webhook record takes rows by its salted email
+ * id; a `seed:named` record by its public name, and only when every row under
+ * that name comes from one donor with no webhook record of their own.
+ *
+ * The export has no public/private flag, so a missing message is added only
+ * from a donor's single tip: a record showing a public name that one tip wrote
+ * proves the tip was public. It goes only to records no supporter can have
+ * edited: seed records, which no account can link to, and bare-name webhook
+ * records, since any panel save rewrites a record as JSON. A cut message is
+ * restored only when it is exactly what the old cap would have cut that full
+ * text to, so an edited message never matches.
  */
-export function planMessageRestores(
+export function planBackfill(
   donors: Record<string, string>,
   rows: TransactionRow[],
-  donorIdFor: (email: string) => string | null
-): RestorePlan {
-  const restores: MessageRestore[] = [];
+  donorIdFor: (email: string) => string | null,
+  { seedAnonDates = {} }: BackfillContext = {}
+): BackfillPlan {
+  const owners = rows.map((row) => (row.email ? donorIdFor(row.email) : null));
+  const isLive = (field: string | null): boolean =>
+    field !== null && field in donors && !field.startsWith('seed:') && !field.startsWith('anon-');
+
+  /** Every row of the record's donor, or null when the export cannot say who that is. */
+  const ownRows = (field: string, name: string | null): number[] | null => {
+    const all = rows.map((_, i) => i);
+    if (!field.startsWith('seed:named:')) {
+      return isLive(field) ? all.filter((i) => owners[i] === field) : [];
+    }
+    const named = name ? all.filter((i) => rows[i].from === name) : [];
+    if (named.length === 0) return [];
+    const donorsIn = new Set(
+      named.map((i) => rows[i].email || `${rows[i].from}|${rows[i].dateTime}`)
+    );
+    if (donorsIn.size !== 1) return null;
+    // Under every name they tipped as, so an earlier tip under another name still dates them.
+    const email = rows[named[0]].email;
+    const theirs = email ? all.filter((i) => rows[i].email === email) : named;
+    return theirs.some((i) => isLive(owners[i])) ? null : theirs;
+  };
+
+  const fixes: RecordFix[] = [];
   let unmatched = 0;
   for (const [field, raw] of Object.entries(donors)) {
     const record = parseDonorRecord(raw);
-    const stored = record.message;
-    if (!record.name || !stored) continue;
-    if (stored.length < PREVIOUS_MESSAGE_LENGTH - 1 || stored.length > PREVIOUS_MESSAGE_LENGTH)
-      continue;
+    const idx = ownRows(field, record.name);
+    const own = (idx ?? []).map((i) => rows[i]);
+    const certain = own.length > 0;
+    const unedited = field.startsWith('seed:named:') || isBareName(raw);
+    const fix: Omit<RecordFix, 'field' | 'previous' | 'value'> = {};
+    const next = { ...record };
 
-    const own = field.startsWith('seed:')
-      ? rows.filter((row) => row.from === record.name)
-      : rows.filter((row) => row.email && donorIdFor(row.email) === field);
-    const matches = new Set<string>();
-    for (const row of own) {
-      const full = filterMessage(row.message);
-      if (
-        full &&
-        full.length > stored.length &&
-        sliceWhole(full, PREVIOUS_MESSAGE_LENGTH) === stored
+    if (record.name) {
+      const texts = own.map((row) => filterMessage(row.message)).filter((t): t is string => !!t);
+      const stored = record.message;
+      if (!stored) {
+        if (certain && unedited && own.length === 1) {
+          next.message = filterMessage(own[0].message) ?? undefined;
+          if (next.message) fix.message = 'added';
+        }
+      } else if (
+        stored.length >= PREVIOUS_MESSAGE_LENGTH - 1 &&
+        stored.length <= PREVIOUS_MESSAGE_LENGTH
       ) {
-        matches.add(full);
+        const matches = new Set(
+          texts.filter(
+            (full) =>
+              full.length > stored.length && sliceWhole(full, PREVIOUS_MESSAGE_LENGTH) === stored
+          )
+        );
+        if (matches.size === 1) {
+          [next.message] = matches;
+          fix.message = 'restored';
+        } else {
+          unmatched++;
+        }
       }
     }
-    if (matches.size !== 1) {
-      unmatched++;
-      continue;
+
+    const firstTip = field.startsWith('seed:anon:')
+      ? seedAnonDates[field]
+      : certain
+        ? earliest(own.map((row) => parseCsvDate(row.dateTime)))
+        : undefined;
+    if (firstTip) {
+      if (!record.joinedAt) {
+        next.joinedAt = firstTip;
+        fix.date = 'added';
+      } else if (Date.parse(record.joinedAt) - Date.parse(firstTip) > MOVED_DATE_MS) {
+        next.joinedAt = firstTip;
+        fix.date = 'moved';
+      }
     }
-    const [message] = matches;
-    restores.push({
-      field,
-      previous: raw,
-      value: serializeDonorRecord({ ...record, message }),
-      storedLength: stored.length,
-      restoredLength: message.length,
-    });
+
+    if (fix.message || fix.date) {
+      fixes.push({ field, previous: raw, value: serializeDonorRecord(next), ...fix });
+    }
   }
-  return { restores, unmatched };
+  return { fixes, unmatched };
 }

@@ -49,6 +49,9 @@ export function useSupporterFocus({
   const [findStatus, setFindStatus] = useState<string | null>(null);
   const [spotlight, setSpotlight] = useState<string | null>(null);
   const linkLanded = useRef(false);
+  const [homeRequest, setHomeRequest] = useState(0);
+  // Only a pause this hook made is undone when the visitor lets go.
+  const pausedByFocus = useRef(false);
 
   const flyToBin = useCallback((id: string) => {
     flyNonce.current += 1;
@@ -61,6 +64,7 @@ export function useSupporterFocus({
       if (seated !== undefined) {
         clock.seek(jump ? seated + SEATED_AFTER : Math.max(clock.time, seated + SEATED_AFTER));
       }
+      if (!clock.isPaused) pausedByFocus.current = true;
       setPaused(true);
     },
     [clock, setPaused]
@@ -81,9 +85,31 @@ export function useSupporterFocus({
 
   const togglePause = useCallback(() => {
     const next = !clock.isPaused;
+    pausedByFocus.current = false;
     setPaused(next);
     if (!next) setFocusedId(null);
   }, [clock, setPaused]);
+
+  const release = useCallback(() => {
+    setFocusedId(null);
+    if (flyTo) {
+      setFlyTo(null);
+      setHomeRequest((n) => n + 1);
+    }
+    if (pausedByFocus.current && clock.isPaused) setPaused(false);
+    pausedByFocus.current = false;
+  }, [flyTo, clock, setPaused]);
+
+  const changeFindQuery = useCallback(
+    (query: string) => {
+      setFindQuery(query);
+      if (query.trim() === '') {
+        setFindStatus(null);
+        release();
+      }
+    },
+    [release]
+  );
 
   const onCredit = useCallback(
     (id: string) => {
@@ -98,6 +124,7 @@ export function useSupporterFocus({
       const at = schedule?.creditTimes.get(id);
       if (at !== undefined) clock.seek(at);
       setPaused(true);
+      pausedByFocus.current = false;
       // An earlier selection would keep the camera and card on someone else.
       setFocusedId((current) => (current === id ? current : null));
     },
@@ -165,11 +192,13 @@ export function useSupporterFocus({
     setFocusedId,
     flyTo,
     findQuery,
-    setFindQuery,
+    setFindQuery: changeFindQuery,
     findStatus,
     spotlight,
+    homeRequest,
     showSupporter,
     selectBin,
+    release,
     togglePause,
     onCredit,
     onKeyboardFocus,

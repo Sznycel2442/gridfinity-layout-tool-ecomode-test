@@ -52,6 +52,7 @@ interface SceneProps {
   /** Translated department names, indexed like the plan's zones. */
   departmentLabels: string[];
   flyTo: FlyToRequest | null;
+  homeRequest: number;
   endTagRef: React.RefObject<HTMLDivElement | null>;
   onVacantSelect: () => void;
 }
@@ -77,6 +78,7 @@ export function SupportersScene({
   anonymousLabel,
   departmentLabels,
   flyTo,
+  homeRequest,
   endTagRef,
   onVacantSelect,
 }: SceneProps) {
@@ -106,6 +108,11 @@ export function SupportersScene({
 
   const pointerTarget = useRef(new Vector3(0, 0, 0));
   const [orbitReady, setOrbitReady] = useState(false);
+  // Sending the camera home hands orbit back for a moment; the post-credits
+  // scene stays armed through that, and only leaving the finale disarms it.
+  const [finaleSettled, setFinaleSettled] = useState(false);
+  if (phase !== 'finale' && finaleSettled) setFinaleSettled(false);
+  if (phase === 'finale' && orbitReady && !finaleSettled) setFinaleSettled(true);
   const [guest, setGuest] = useState(false);
   const guestLeft = useCallback(() => {
     setGuest(false);
@@ -127,6 +134,7 @@ export function SupportersScene({
         phase={phase}
         stage={stage}
         focusSeat={focusSeat}
+        homeRequest={homeRequest}
         reducedMotion={reducedMotion}
         onOrbitReady={setOrbitReady}
       />
@@ -180,7 +188,7 @@ export function SupportersScene({
         geometry={binGeometry}
         point={layout.vacant}
         palette={palette}
-        armed={phase === 'finale' && orbitReady && !reducedMotion}
+        armed={phase === 'finale' && finaleSettled && !reducedMotion}
         label={postCreditsLabel}
         onStart={() => {
           setGuest(true);

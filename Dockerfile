@@ -5,12 +5,13 @@
 
 # glibc on purpose: it is the toolchain CI and Vercel build with, and the
 # native TypeScript compiler has no musl build.
-FROM --platform=$BUILDPLATFORM node:24-bookworm-slim@sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20 AS build
+FROM --platform=$BUILDPLATFORM node:26-bookworm-slim@sha256:28147155d47dc31abe0a46e0d12b59b2fb3d0a2dcc5dc65fce76a074180b16fe AS build
 WORKDIR /app
 ENV PNPM_HOME=/pnpm COREPACK_ENABLE_DOWNLOAD_PROMPT=0 CI=true
 # corepack reads the pinned pnpm from package.json; it runs before .npmrc lands
 # because that file's min-release-age would refuse a fresh exact pin under npm.
-RUN corepack enable
+# Node 25+ no longer bundles corepack, so it is installed first.
+RUN npm install -g corepack@0.36.0 && corepack enable
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
 COPY patches ./patches
 COPY packages ./packages

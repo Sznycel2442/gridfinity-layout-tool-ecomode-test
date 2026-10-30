@@ -1,7 +1,20 @@
 import { describe, expect, it } from 'vitest';
+import { mm } from '@/core/types';
+import type { ScrewHoleParams } from '@/core/types/baseplate';
 import type { ResolvedBaseplateParams } from '@/shared/types/bin';
 import { frameCells } from './cellDecomposition';
-import { ecoJointCutouts } from './ecoPlate';
+import {
+  ecoJointCutouts,
+  ecoKeepOuts,
+  ecoMagnetKeepOuts,
+  ecoScrewKeepOuts,
+  type EcoJointCutout,
+  type EcoKeepOut,
+} from './ecoPlate';
+import { MAGNET_CHAMFER_MM } from './magnetHoleStyle';
+import { planMountMagnets } from './mountMagnetPlan';
+import { planBaseplateScrewHoles, screwPlacementFor } from './screwHolePlacement';
+import { SCREW_MARGIN_MIN_WALL_MM } from './screwHolePlan';
 
 const plate = (overrides: Partial<ResolvedBaseplateParams> = {}): ResolvedBaseplateParams => ({
   width: 2,
@@ -26,6 +39,131 @@ describe('ecoJointCutouts', () => {
     expect(cutouts).toContainEqual({ x: 0, y: -21, width: 7, depth: 25.2 });
     expect(cutouts).toContainEqual({ x: -42, y: 21, width: 7, depth: 25.2 });
     expect(cutouts).toContainEqual({ x: 21, y: 42, width: 25.2, depth: 7 });
+  });
+
+  it('relieves the cell edges beside wide padding and leaves a solid strip outside', () => {
+    const cutouts = ecoJointCutouts(plate({ paddingLeft: 10, paddingBack: 10 }));
+    expect(cutouts).toHaveLength(12);
+    expect(cutouts).toContainEqual({ x: -42, y: 21, width: 7, depth: 25.2 });
+    expect(cutouts).toContainEqual({ x: 21, y: 42, width: 25.2, depth: 7 });
+  });
+
+  it('runs the relief out through padding too narrow to stand beside it', () => {
+    const cutouts = ecoJointCutouts(plate({ paddingLeft: 3, paddingBack: 5.4 }));
+    expect(cutouts).toContainEqual({ x: -43.5, y: 21, width: 10, depth: 25.2 });
+    const back = cutouts.find((slot) => slot.x === 21 && slot.y > 42);
+    expect(back?.y).toBeCloseTo(44.7);
+    expect(back?.depth).toBeCloseTo(12.4);
+  });
+
+  const screwPlate = (padding: number, screwHoles: ScrewHoleParams): ResolvedBaseplateParams =>
+    plate({
+      width: 1,
+      depth: 1,
+      paddingLeft: padding,
+      paddingRight: padding,
+      paddingFront: padding,
+      paddingBack: padding,
+      screwHoles,
+    });
+  const expectClear = (cutouts: EcoJointCutout[], keepOuts: EcoKeepOut[]): void => {
+    for (const slot of cutouts) {
+      for (const keepOut of keepOuts) {
+        const dx = Math.max(Math.abs(keepOut.x - slot.x) - slot.width / 2, 0);
+        const dy = Math.max(Math.abs(keepOut.y - slot.y) - slot.depth / 2, 0);
+        expect(Math.hypot(dx, dy)).toBeGreaterThanOrEqual(keepOut.radius - 1e-9);
+      }
+    }
+  };
+
+  it('keeps a padding notch out of the wall around a margin screw seat', () => {
+    const screwHoles: ScrewHoleParams = {
+      enabled: true,
+      diameter: mm(3.4),
+      headStyle: 'countersink',
+      headDiameter: mm(6),
+      screwsPerPiece: 8,
+    };
+    const params = screwPlate(10, screwHoles);
+    const holes = planBaseplateScrewHoles(
+      screwHoles,
+      params,
+      screwPlacementFor(screwHoles, params)
+    );
+    expect(holes.some((hole) => hole.site === 'margin' && hole.x === 0)).toBe(true);
+    const keepOuts = ecoScrewKeepOuts(holes, screwHoles);
+    const cutouts = ecoJointCutouts(params, [], keepOuts);
+
+    expectClear(cutouts, keepOuts);
+    const back = cutouts.find((slot) => slot.x === 0 && slot.y > 0);
+    expect(back).toEqual({ x: 0, y: 19.25, width: 25.2, depth: 3.5 });
+  });
+
+  it('trims a padding notch, keeping it, when the keep-out is inside the cell', () => {
+    const cutouts = ecoJointCutouts(
+      plate({ paddingLeft: 10 }),
+      [],
+      [{ x: -34, y: 34, radius: 5.25 }]
+    );
+    const notch = cutouts.find((slot) => slot.x === -42 && slot.y === 21);
+    expect(notch?.width).toBe(7);
+    expect(notch?.depth).toBeLessThan(25.2);
+  });
+
+  it('sizes a screw keep-out from its shaft when the shaft is wider than the head', () => {
+    const screwHoles: ScrewHoleParams = {
+      enabled: true,
+      diameter: mm(8),
+      headStyle: 'countersink',
+      headDiameter: mm(3),
+      screwsPerPiece: 8,
+    };
+    const params = screwPlate(14, screwHoles);
+    const holes = planBaseplateScrewHoles(
+      screwHoles,
+      params,
+      screwPlacementFor(screwHoles, params)
+    );
+    const keepOuts = ecoScrewKeepOuts(holes, screwHoles);
+    expect(keepOuts[0]?.radius).toBeCloseTo(4 + SCREW_MARGIN_MIN_WALL_MM);
+    expectClear(ecoJointCutouts(params, [], keepOuts), keepOuts);
+  });
+
+  it('widens a chamfered magnet keep-out to the mouth of its pocket', () => {
+    const keepOuts = ecoMagnetKeepOuts({ chamfered: [[1, 2]], plain: [[3, 4]] }, 6.5);
+    expect(keepOuts).toEqual([
+      { x: 3, y: 4, radius: 3.25 + SCREW_MARGIN_MIN_WALL_MM },
+      { x: 1, y: 2, radius: 3.25 + MAGNET_CHAMFER_MM + SCREW_MARGIN_MIN_WALL_MM },
+    ]);
+  });
+
+  it('trims reliefs clear of mount magnets at the junctions beside half-width cells', () => {
+    const params = plate({ width: 3, depth: 2.5 });
+    const magnets = planMountMagnets(
+      { enabled: true, diameter: mm(6.5), depth: mm(2.5) },
+      3,
+      2.5,
+      4.65,
+      4.65,
+      { gridUnitMm: 42, fractionalEdgeX: 'end', fractionalEdgeY: 'end' }
+    );
+    expect(magnets.length).toBeGreaterThan(0);
+    const keepOuts = ecoKeepOuts(magnets, 6.5);
+    const kept = ecoJointCutouts(params, [], keepOuts);
+    expect(kept).not.toEqual(ecoJointCutouts(params));
+    expectClear(kept, keepOuts);
+  });
+
+  it('shortens a joint relief from both ends until a keep-out near its end clears', () => {
+    const cutouts = ecoJointCutouts(plate(), [], [{ x: 0, y: -12, radius: 4 }]);
+    expect(cutouts).toHaveLength(12);
+    expect(cutouts).toContainEqual({ x: 0, y: -21, width: 7, depth: 10 });
+  });
+
+  it('drops a joint relief that a keep-out sits in the middle of', () => {
+    const cutouts = ecoJointCutouts(plate(), [], [{ x: 0, y: -21, radius: 4 }]);
+    expect(cutouts).toHaveLength(11);
+    expect(cutouts.some((slot) => slot.x === 0 && slot.y === -21)).toBe(false);
   });
 
   it('relieves a single cell frame including split join edges', () => {

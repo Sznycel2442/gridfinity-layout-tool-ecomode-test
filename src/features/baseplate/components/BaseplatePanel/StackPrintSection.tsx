@@ -25,6 +25,7 @@ import { StackSampleButton } from './StackSampleButton';
 import { Stepper } from '@/design-system/Stepper';
 import { Alert } from '@/design-system/Alert';
 import { AlertTriangleIcon, CheckIcon } from '@/design-system/Icon';
+import { Checkbox } from '@/design-system/Checkbox/Checkbox';
 import { useStackPrintStatus } from '../../hooks/useStackPrintStatus';
 interface StackPrintSectionProps {
   readonly stackPrint: StackPrintParams | undefined;
@@ -82,6 +83,8 @@ function stackWarning(
       return null;
     case 'singlePlate':
       return t('baseplate.stackPrint.warning.singlePlate');
+    case 'incompatibleFootprints':
+      return t('baseplate.stackPrint.warning.incompatibleFootprints');
     case 'buildHeightCapped':
       return t('baseplate.stackPrint.warning.buildHeightCapped', {
         gap: gapMm.toFixed(1),
@@ -107,7 +110,13 @@ export function StackPrintSection({ stackPrint, onChange }: StackPrintSectionPro
   const outputSummary = enabled && !warning ? stackOutputSummary(t, plan, railCount) : null;
 
   const patch = (next: Partial<StackPrintParams>): void => {
-    onChange({ enabled: true, gapMm, copies, ...next });
+    onChange({
+      enabled: true,
+      gapMm,
+      copies,
+      ...(stackPrint?.mixedSizes !== undefined ? { mixedSizes: stackPrint.mixedSizes } : {}),
+      ...next,
+    });
   };
 
   return (
@@ -127,6 +136,17 @@ export function StackPrintSection({ stackPrint, onChange }: StackPrintSectionPro
             <p className="text-label leading-relaxed text-content-secondary">
               {t('baseplate.stackPrint.hint')}
             </p>
+
+            <div>
+              <Checkbox
+                checked={stackPrint?.mixedSizes === true}
+                onChange={(checked) => patch({ mixedSizes: checked })}
+                label={t('baseplate.stackPrint.mixedSizes.label')}
+              />
+              <p className="text-label leading-relaxed text-content-tertiary pl-6">
+                {t('baseplate.stackPrint.mixedSizes.info')}
+              </p>
+            </div>
 
             <SettingsRow
               label={t('baseplate.stackPrint.copies.label')}

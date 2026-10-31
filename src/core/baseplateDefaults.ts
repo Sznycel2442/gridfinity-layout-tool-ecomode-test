@@ -310,6 +310,7 @@ function migrateScrewHoles(value: unknown): ScrewHoleParams | undefined {
   if (o.headStyle !== 'countersink' && o.headStyle !== 'counterbore') return undefined;
   return {
     enabled: o.enabled,
+    ...(o.mixedSizes === true ? { mixedSizes: true } : {}),
     diameter: mm(
       clampNumber(
         o.diameter,

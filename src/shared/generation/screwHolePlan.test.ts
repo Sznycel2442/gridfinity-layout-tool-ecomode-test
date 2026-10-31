@@ -168,6 +168,15 @@ describe('effectiveMarginBands', () => {
     expect(effectiveMarginBands(padded)).toEqual({ left: 12, right: 12, front: 12, back: 12 });
   });
 
+  it('reads every band as zero under an edge inset, which keeps screws off the lip (#4764)', () => {
+    expect(effectiveMarginBands({ ...padded, screwHoles: { edgeInsetCells: 1 } })).toEqual({
+      left: 0,
+      right: 0,
+      front: 0,
+      back: 0,
+    });
+  });
+
   it('reads every band as zero under over-tile', () => {
     // Padding survives in resolved params under over-tile, but the material is
     // functional grid rather than the solid ring a screw needs.

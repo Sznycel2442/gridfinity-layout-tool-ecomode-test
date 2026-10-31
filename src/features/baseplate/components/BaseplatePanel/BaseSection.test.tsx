@@ -238,6 +238,18 @@ describe('BaseSection', () => {
       ).toBeInTheDocument();
     });
 
+    it('writes the inner cell corner through to the layout store', () => {
+      enableScrews('countersink');
+      render(<BaseSection />);
+      fireEvent.click(
+        screen.getByRole('radio', { name: 'baseplate.screwHoles.cellCorner.inner', hidden: true })
+      );
+      expect(useLayoutStore.getState().layout.baseplateParams?.screwHoles?.cellCorner).toBe(
+        'inner'
+      );
+      expect(screen.getByText('baseplate.screwHoles.edgeInset.label')).toBeInTheDocument();
+    });
+
     it('shows the counterbore depth only for a counterbore head', () => {
       enableScrews('counterbore');
       render(<BaseSection />);

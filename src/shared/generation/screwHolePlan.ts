@@ -166,7 +166,9 @@ export interface ScrewPieceInput {
  * Padding survives in resolved params under `overTile`, but the material there
  * is functional grid rather than the solid ring a screw needs, so those bands
  * read as zero. `detachMargins` needs no handling here: it already zeroes the
- * body's padding, and each detached rail is planned as its own piece.
+ * body's padding, and each detached rail is planned as its own piece. An edge
+ * inset zeroes them too: the padding is under the drawer lip it keeps screws
+ * away from.
  */
 export function effectiveMarginBands(params: {
   readonly paddingLeft: number;
@@ -174,8 +176,11 @@ export function effectiveMarginBands(params: {
   readonly paddingFront: number;
   readonly paddingBack: number;
   readonly overTile?: boolean;
+  readonly screwHoles?: Pick<ScrewHoleParams, 'edgeInsetCells'>;
 }): ScrewMarginBands {
-  if (params.overTile === true) return { left: 0, right: 0, front: 0, back: 0 };
+  if (params.overTile === true || (params.screwHoles?.edgeInsetCells ?? 0) > 0) {
+    return { left: 0, right: 0, front: 0, back: 0 };
+  }
   return {
     left: params.paddingLeft,
     right: params.paddingRight,

@@ -167,8 +167,8 @@ export function binDimensions(params: BinParams): BinDimensions {
   const outerW = params.width * params.gridUnitMm - GRIDFINITY.TOLERANCE;
   const outerD = params.depth * gridUnitMmY - GRIDFINITY.TOLERANCE;
   const inset = pullTabWallInset(params);
-  const innerW = outerW - 2 * params.wallThickness - inset.x;
-  const innerD = outerD - 2 * params.wallThickness - inset.y;
+  const innerW = outerW - 2 * params.wallThickness - (inset.left + inset.right);
+  const innerD = outerD - 2 * params.wallThickness - (inset.front + inset.back);
   const totalH = params.height * params.heightUnitMm;
   const isFlat = params.base.style === 'flat';
   // Mirrors the worker's `deriveDimensions`. A tray bin is socketless
@@ -195,13 +195,14 @@ export interface TaperBandSides {
 }
 
 export interface CutoutInterior {
-  /** Interior cavity width in mm, overhang folded in. */
+  /** Interior cavity width in mm, overhang and pull tab walls folded in. */
   readonly innerW: number;
-  /** Interior cavity depth in mm, overhang folded in. */
+  /** Interior cavity depth in mm, overhang and pull tab walls folded in. */
   readonly innerD: number;
   /**
    * X shift (mm, +X) of the expanded cavity center inside the outer body when
-   * opposite overhang sides differ. Zero for symmetric/absent overhang. Only
+   * opposite overhang sides differ, or when a pull tab thickens one side wall
+   * and not the other. Zero when neither applies. Only
    * model-space consumers (the 3D ghost) need it; the flat 2D cutout editor
    * works in the offset-free `[0, innerW]` in-cavity frame.
    */
@@ -224,6 +225,10 @@ export interface CutoutInterior {
  * overhang leaves the interior nominal, overhang is suppressed for polygon
  * masks (the mask defines its own footprint), negative side values clamp to
  * zero, and the asymmetry offset is `(right − left) / 2` / `(back − front) / 2`.
+ *
+ * Pull tab walls fold in the same way: each wall `pullTabWallInset` thickens
+ * shrinks the interior and moves its center away from that wall, so a tab on
+ * the left or front alone shifts the offset with no overhang at all.
  */
 export function cutoutInterior(params: BinParams): CutoutInterior {
   const { innerW, innerD } = binDimensions(params);
@@ -231,8 +236,8 @@ export function cutoutInterior(params: BinParams): CutoutInterior {
   const inset = pullTabWallInset(params);
   return {
     ...cavity,
-    offsetX: cavity.offsetX - inset.x / 2,
-    offsetY: cavity.offsetY + inset.y / 2,
+    offsetX: cavity.offsetX - (inset.right - inset.left) / 2,
+    offsetY: cavity.offsetY + (inset.front - inset.back) / 2,
   };
 }
 

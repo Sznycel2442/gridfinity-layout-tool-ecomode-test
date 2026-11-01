@@ -252,6 +252,33 @@ describe('buildTowerLayers', () => {
     }
   });
 
+  it('turns the bottom plate over too when the flip asks for it', () => {
+    const layers = buildTowerLayers(plate(), 3, 10.2, {
+      axis: 'x',
+      offsetMm: 30,
+      flipBottom: true,
+    });
+    const b0 = meshBounds(layers[0].vertices);
+    expect(b0.minZ).toBeCloseTo(0, 5);
+    expect(b0.maxZ).toBeCloseTo(10, 5);
+    for (let i = 0; i < layers.length; i++) {
+      expect(layers[i].normals[2], `plate ${i + 1}`).toBeCloseTo(1, 5);
+      expect(Array.from(layers[i].vertices.filter((_, k) => k % 3 !== 2))).toEqual(
+        Array.from(layers[0].vertices.filter((_, k) => k % 3 !== 2))
+      );
+    }
+  });
+
+  it('keeps a lone plate upright even when its copies would all be turned', () => {
+    const [only] = buildTowerLayers(plate(), 1, 10.2, {
+      axis: 'x',
+      offsetMm: 30,
+      flipBottom: true,
+    });
+    expect(only.normals[2]).toBeCloseTo(-1, 5);
+    expect(Array.from(only.vertices)).toEqual(Array.from(plate().vertices));
+  });
+
   it('clamps copies to at least 1', () => {
     expect(buildTowerLayers(plate(), 0, 10.2, { axis: 'x', offsetMm: 30 })).toHaveLength(1);
     expect(buildTowerLayers(plate(), 3.9, 10.2, { axis: 'x', offsetMm: 30 })).toHaveLength(3);
@@ -381,18 +408,109 @@ describe('planPlateFlip', () => {
     });
   });
 
-  it('judges a custom perimeter on its padding like any other plate', () => {
-    const outline: DrawerOutline = {
-      vertices: cornerCutVertices(4 * 42, 4 * 42, {
-        tl: { kind: 'radius', r: 42 },
-        tr: { kind: 'none' },
-        bl: { kind: 'none' },
-        br: { kind: 'none' },
-      }),
-    };
-    expect(planPlateFlip(plate({ paddingFront: 8.5, outline }))).toEqual({
-      axis: 'y',
-      offsetMm: 0,
+  describe('custom perimeters', () => {
+    const cells = (vertices: readonly (readonly [number, number])[]): DrawerOutline => ({
+      vertices: vertices.map(([x, y]) => ({ x: x * 42, y: y * 42 })),
+    });
+
+    it('turns every copy over when no turn maps the outline onto itself', () => {
+      // Front row of three plus the back-left cell: turned over about either
+      // axis it is a mirrored L, two cells of it over air.
+      const lShape = cells([
+        [0, 0],
+        [3, 0],
+        [3, 1],
+        [1, 1],
+        [1, 2],
+        [0, 2],
+      ]);
+      expect(planPlateFlip(plate({ width: 3, depth: 2, outline: lShape }))).toEqual({
+        axis: 'x',
+        offsetMm: 0,
+        flipBottom: true,
+      });
+      // A lone rounded corner lands on the opposite side under either turn.
+      const oneCorner: DrawerOutline = {
+        vertices: cornerCutVertices(4 * 42, 4 * 42 + 8.5, {
+          tl: { kind: 'radius', r: 42 },
+          tr: { kind: 'none' },
+          bl: { kind: 'none' },
+          br: { kind: 'none' },
+        }),
+      };
+      expect(planPlateFlip(plate({ paddingFront: 8.5, outline: oneCorner }))).toEqual({
+        axis: 'y',
+        offsetMm: 0,
+        flipBottom: true,
+      });
+    });
+
+    it(
+      'plans a large shaped plate without measuring every overhang in full',
+      { timeout: 2000 },
+      () => {
+        // 20 x 14 units with a 10 x 7 corner missing: the decision is made at the
+        // first reading past the tolerance, not after scanning the whole corner.
+        const bigL = cells([
+          [0, 0],
+          [20, 0],
+          [20, 7],
+          [10, 7],
+          [10, 14],
+          [0, 14],
+        ]);
+        expect(planPlateFlip(plate({ width: 20, depth: 14, outline: bigL })).flipBottom).toBe(true);
+      }
+    );
+
+    it('takes the turn the outline is symmetric about, keeping the bottom plate upright', () => {
+      // Back-middle cell missing: the padding tie picks X, which would move the
+      // gap to the front; only the Y turn keeps it at the back.
+      const uShape = cells([
+        [0, 0],
+        [3, 0],
+        [3, 2],
+        [2, 2],
+        [2, 1],
+        [1, 1],
+        [1, 2],
+        [0, 2],
+      ]);
+      expect(planPlateFlip(plate({ width: 3, depth: 2, outline: uShape }))).toEqual({
+        axis: 'y',
+        offsetMm: 0,
+      });
+      // Right-middle cell missing: symmetric about X, which the tie already picks.
+      const cShape = cells([
+        [0, 0],
+        [2, 0],
+        [2, 1],
+        [1, 1],
+        [1, 2],
+        [2, 2],
+        [2, 3],
+        [0, 3],
+      ]);
+      expect(planPlateFlip(plate({ width: 2, depth: 3, outline: cShape }))).toEqual({
+        axis: 'x',
+        offsetMm: 0,
+      });
+    });
+
+    it('leaves a uniformly rounded plate on its padding pick', () => {
+      const r = { kind: 'radius', r: 42 } as const;
+      const roundedRect = (w: number, d: number): DrawerOutline => ({
+        vertices: cornerCutVertices(w, d, { tl: r, tr: r, bl: r, br: r }),
+      });
+      expect(planPlateFlip(plate({ outline: roundedRect(168, 168) }))).toEqual({
+        axis: 'x',
+        offsetMm: 0,
+      });
+      // One-sided padding moves the outline off the lattice centre under the X
+      // turn, so the Y turn is both the padding's pick and the symmetric one.
+      expect(planPlateFlip(plate({ paddingFront: 8.5, outline: roundedRect(168, 176.5) }))).toEqual(
+        { axis: 'y', offsetMm: 0 }
+      );
     });
   });
 

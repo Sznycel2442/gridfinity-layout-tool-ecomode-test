@@ -76,8 +76,8 @@ jobs:
     if: ${{ !startsWith(github.head_ref, 'release-please--') }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    # packages: write is only exercised by the cache export on non-PR events; fork
-    # and Dependabot PRs get a read-only token from GitHub regardless.
+    # Only the upstream repository writes its shared cache. Fork tokens cannot
+    # write to the upstream package, even on pushes to their own main branches.
     permissions:
       contents: read
       packages: write
@@ -123,7 +123,7 @@ jobs:
             GIT_COMMIT_TIME=${{ steps.meta.outputs.time }}
             VERSION=${{ steps.meta.outputs.version }}
           cache-from: type=registry,ref=${{ env.CACHE_REF }}
-          cache-to: ${{ github.event_name != 'pull_request' && format('type=registry,ref={0},mode=max', env.CACHE_REF) || '' }}
+          cache-to: ${{ github.event_name != 'pull_request' && github.repository == 'andymai/gridfinity-layout-tool' && format('type=registry,ref={0},mode=max', env.CACHE_REF) || '' }}
 
       # Same hardening as docker-compose.yml. The probe interval is shortened
       # here so the health wait does not race the first 30 s probe.

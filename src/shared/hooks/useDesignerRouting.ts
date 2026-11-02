@@ -9,6 +9,7 @@
  */
 
 import { useState, useEffect, useCallback } from 'react';
+import { pagePath, pagePathname } from './pageBasePath';
 
 // The routing helpers re-dispatch popstate after pushState so route listeners
 // re-read the URL. Overlays that trap a history entry (community detail) must
@@ -33,7 +34,7 @@ export function isSyntheticPopstate(): boolean {
  * Check if the current URL is the designer route.
  */
 function isDesignerPath(): boolean {
-  return window.location.pathname === '/designer' || window.location.pathname === '/designer/';
+  return pagePathname() === '/designer' || pagePathname() === '/designer/';
 }
 
 /**
@@ -61,8 +62,8 @@ function getPlacementBinIdFromUrl(): string | null {
  * from.
  */
 export function buildDesignerUrl(designId?: string | null, placementBinId?: string): string {
-  if (!designId) return '/designer';
-  const url = `/designer?id=${encodeURIComponent(designId)}`;
+  if (!designId) return pagePath('/designer');
+  const url = pagePath(`/designer?id=${encodeURIComponent(designId)}`);
   return placementBinId ? `${url}&bin=${encodeURIComponent(placementBinId)}` : url;
 }
 
@@ -94,7 +95,7 @@ export function useDesignerRouting() {
    * Navigate to the designer (new/blank design).
    */
   const navigateToDesigner = useCallback(() => {
-    window.history.pushState({ designId: null }, '', '/designer');
+    window.history.pushState({ designId: null }, '', pagePath('/designer'));
     setIsDesignerRoute(true);
     setDesignIdFromUrl(null);
     setPlacementBinIdFromUrl(null);
@@ -131,7 +132,7 @@ export function useDesignerRouting() {
    * Navigate back to the Layout Planner.
    */
   const navigateToPlanner = useCallback(() => {
-    window.history.pushState(null, '', '/');
+    window.history.pushState(null, '', pagePath('/'));
     setIsDesignerRoute(false);
     setDesignIdFromUrl(null);
     setPlacementBinIdFromUrl(null);

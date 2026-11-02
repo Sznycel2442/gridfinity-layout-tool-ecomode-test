@@ -1,0 +1,50 @@
+# Build the fork's app before publishing it from main to GitHub Pages.
+name: Fork Pages
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: fork-pages-main
+  cancel-in-progress: true
+
+jobs:
+  build:
+    if: github.repository == 'Sznycel2442/gridfinity-layout-tool-ecomode-test'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Setup dependencies
+        uses: ./.github/actions/setup-pnpm
+      - name: Build project Pages site
+        env:
+          GITHUB_PAGES_BASE: /gridfinity-layout-tool-ecomode-test/
+        run: |
+          pnpm run build:content
+          pnpm run build:en-locale
+          pnpm exec tsgo -b
+          pnpm exec vite build --base "$GITHUB_PAGES_BASE"
+          cp dist/index.html dist/404.html
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy Pages site
+        id: deployment
+        uses: actions/deploy-pages@v4

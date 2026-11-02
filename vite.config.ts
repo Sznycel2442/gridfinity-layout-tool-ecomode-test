@@ -29,6 +29,10 @@ const CONTENT_ROUTE = new RegExp(`^${CONTENT_ROUTE_SOURCE}`);
 // RegExpRoute tests against the full href, where a leading ^ could never match.
 const CONTENT_ROUTE_HREF = new RegExp(CONTENT_ROUTE_SOURCE);
 
+// The fork publishes under a repository path. Keep the installed PWA and its
+// navigation fallback in the same scope as Vite's --base setting.
+const siteBase = process.env.GITHUB_PAGES_BASE ?? '/';
+
 // Chunks reachable from the entry by static import, i.e. the ones the app needs
 // to boot. Collected from the bundle graph so the precache can hold the boot
 // graph and nothing else: precaching every emitted chunk downloads all ~190 of
@@ -115,20 +119,20 @@ export default defineConfig({
         theme_color: '#0f0f12',
         background_color: '#0f0f12',
         display: 'standalone',
-        start_url: '/',
+        start_url: siteBase,
         icons: [
           {
-            src: '/icons/icon-192.png',
+            src: `${siteBase}icons/icon-192.png`,
             sizes: '192x192',
             type: 'image/png',
           },
           {
-            src: '/icons/icon-512.png',
+            src: `${siteBase}icons/icon-512.png`,
             sizes: '512x512',
             type: 'image/png',
           },
           {
-            src: '/icons/icon-512.png',
+            src: `${siteBase}icons/icon-512.png`,
             sizes: '512x512',
             type: 'image/png',
             purpose: 'maskable',
@@ -208,7 +212,7 @@ export default defineConfig({
         // Clean up old caches from previous versions
         cleanupOutdatedCaches: true,
         // SPA navigation fallback - serve index.html for all navigation requests
-        navigateFallback: '/index.html',
+        navigateFallback: `${siteBase}index.html`,
         // Don't intercept these paths with navigation fallback
         navigateFallbackDenylist: [
           /^\/api\//,

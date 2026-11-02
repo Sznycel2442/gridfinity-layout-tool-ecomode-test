@@ -13,16 +13,18 @@ interface VercelRewrite {
 /**
  * Client-side routes, read from the routing hooks that own them.
  *
- * Each `use*Routing` hook decides it is active by comparing
- * `window.location.pathname` against a literal. That literal is the route, so
- * deriving it here means a new page can't be added without this check seeing it.
+ * Each `use*Routing` hook compares the pathname (directly or through the
+ * Pages-aware `pagePathname()` helper) against a literal route. Deriving those
+ * literals here means a new page can't be added without this check seeing it.
  */
 function spaRoutesFromHooks(): string[] {
   const routes = new Set<string>();
   for (const file of readdirSync(HOOKS_DIR)) {
     if (!/^use.*Routing\.ts$/.test(file) || file.endsWith('.test.ts')) continue;
     const src = readFileSync(join(HOOKS_DIR, file), 'utf8');
-    for (const m of src.matchAll(/window\.location\.pathname === '(\/[^']*)'/g)) {
+    for (const m of src.matchAll(
+      /(?:window\.location\.pathname|pagePathname\(\)) === '(\/[^']*)'/g
+    )) {
       const route = m[1].replace(/\/$/, '');
       if (route) routes.add(route);
     }

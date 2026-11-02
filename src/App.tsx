@@ -211,7 +211,7 @@ export default function App() {
   useSpaceMouseDevice(useFeatureFlag('spacemouse'));
   const saveStatus = useAutoSave();
   useCrossTabSync();
-  useLayoutRouting({ skip: isNonLayoutRoute });
+  useLayoutRouting({ skip: isNonLayoutRoute || import.meta.env.BASE_URL !== '/' });
   usePWAUpdate();
   useAnalytics();
   useEngagementNudges();

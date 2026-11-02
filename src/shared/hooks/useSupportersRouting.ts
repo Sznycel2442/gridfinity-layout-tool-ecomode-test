@@ -7,9 +7,10 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { dispatchSyntheticPopstate } from './useDesignerRouting';
+import { pagePath, pagePathname } from './pageBasePath';
 
 function isSupportersPath(): boolean {
-  return window.location.pathname === '/supporters' || window.location.pathname === '/supporters/';
+  return pagePathname() === '/supporters' || pagePathname() === '/supporters/';
 }
 
 export function useSupportersRouting() {
@@ -22,13 +23,13 @@ export function useSupportersRouting() {
   }, []);
 
   const navigateToSupporters = useCallback(() => {
-    window.history.pushState(null, '', '/supporters');
+    window.history.pushState(null, '', pagePath('/supporters'));
     setIsSupportersRoute(true);
     dispatchSyntheticPopstate();
   }, []);
 
   const navigateHome = useCallback(() => {
-    window.history.pushState(null, '', '/');
+    window.history.pushState(null, '', pagePath('/'));
     setIsSupportersRoute(false);
     dispatchSyntheticPopstate();
   }, []);

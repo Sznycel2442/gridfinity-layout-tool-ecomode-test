@@ -7,12 +7,13 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { dispatchSyntheticPopstate } from './useDesignerRouting';
+import { pagePath, pagePathname } from './pageBasePath';
 
 /**
  * Check if the current URL is the baseplate route.
  */
 function isBaseplatePath(): boolean {
-  return window.location.pathname === '/baseplate' || window.location.pathname === '/baseplate/';
+  return pagePathname() === '/baseplate' || pagePathname() === '/baseplate/';
 }
 
 /**
@@ -59,7 +60,9 @@ export function useBaseplateRouting() {
    * When no layoutId is provided, navigates to /baseplate without query params.
    */
   const navigateToBaseplate = useCallback((layoutId?: string) => {
-    const url = layoutId ? `/baseplate?layoutId=${encodeURIComponent(layoutId)}` : '/baseplate';
+    const url = pagePath(
+      layoutId ? `/baseplate?layoutId=${encodeURIComponent(layoutId)}` : '/baseplate'
+    );
     window.history.pushState(layoutId ? { layoutId } : null, '', url);
     setIsBaseplateRoute(true);
     setLayoutIdFromUrl(layoutId ?? null);
@@ -70,7 +73,7 @@ export function useBaseplateRouting() {
    * Navigate back to the Layout Planner.
    */
   const navigateToPlanner = useCallback(() => {
-    window.history.pushState(null, '', '/');
+    window.history.pushState(null, '', pagePath('/'));
     setIsBaseplateRoute(false);
     setLayoutIdFromUrl(null);
     setIsStandalone(false);
